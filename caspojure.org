@@ -14,9 +14,6 @@ Provide alternate implementation of Casper in Clojure.
                  ])
 #+END_SRC
 
-#+RESULTS:
-: class clojure.lang.Compiler$CompilerExceptionclass clojure.lang.Compiler$CompilerExceptionCompilerException java.lang.RuntimeException: Unable to resolve symbol: defproject in this context, compiling:(/Users/lederstrumpf/Development_Dirty_Playground/Casper/caspojure/caspojure.org[*Org Src caspojure.org[ clojure ]*]:1:1) 
-
 * Validator implementation
 ** Namespace declaration
 #+BEGIN_SRC clojure :tangle src/caspojure/message.clj
@@ -38,30 +35,32 @@ Each node maintains a current view of the world. Nodes send one another messages
 (s/def ::relayer-id (s/int-in 0 relayer-count))
 (s/def ::vote boolean?)
 (s/def ::vote-message (s/tuple ::relayer-id ::vote))
-(s/def ::estimate boolean?)
-(s/def ::genesis-message (s/tuple ::relayer-id ::estimate nil?))
-(s/def ::relay-message (s/or :message (s/tuple ::relayer-id ::estimate (s/every (s/or :relay ::relay-message :vote ::vote-message) :min-count 1 :gen-max 4))
-                       :genesis ::genesis-message))
-
-(gen/generate (s/gen ::vote-message))
-(gen/generate (s/gen ::relay-message))
+(s/def ::estimate (s/or :consensus boolean? :nil nil?))
+(s/def ::justification (s/every (s/or :relay ::relay-message :vote ::vote-message) :min-count 1 :gen-max 4))
+(s/def ::genesis-message (s/tuple ::relayer-id nil? nil?))
+(s/def ::relay-message (s/or :message (s/tuple ::relayer-id ::estimate ::justification)
+                             :genesis ::genesis-message))
 #+END_SRC
 
 #+RESULTS:
+: #'caspojure.message/relayer-count
+: :caspojure.message/relayer-id
 : :caspojure.message/vote
+: :caspojure.message/vote-message
 : :caspojure.message/estimate
+: :caspojure.message/justification
 : :caspojure.message/genesis-message
-: :caspojure.message/message
+: :caspojure.message/relay-message
 
 Here's an example of a message.
-#+BEGIN_SRC clojure
+#+BEGIN_SRC clojure :tangle no
 (s/valid? ::vote-message [2 false])
 
-(s/explain ::relay-message [1 false
+(s/valid? ::relay-message [1 false
                      [[9 true
-                       [[2 false nil]
-                        [1 true [[0 true nil]]]]]
-                      [0 true nil]]
+                       [[2 nil nil]
+                        [1 true [[0 nil nil]]]]]
+                      [0 nil nil]]
                      ])
 #+END_SRC
 
@@ -70,11 +69,210 @@ Here's an example of a message.
 : true
 
 Here's a message generated from its spec.
-#+BEGIN_SRC clojure
+#+BEGIN_SRC clojure :tangle no
 (gen/generate (s/gen ::vote-message))
+#+END_SRC
+
+#+RESULTS:
+| 5 | true |
+
+#+BEGIN_SRC clojure :tangle no
 (gen/generate (s/gen ::relay-message))
 #+END_SRC
 
 #+RESULTS:
-| 1 | 1 | ((1 1 ((1 1 ((1 0 ((1 0 nil) (0 0 nil) (1 0 nil) (1 1 nil))))) (0 1 ((0 0 ((1 0 nil) (1 0 nil))) (1 0 ((1 0 nil) (1 1 nil))) (0 1 nil) (0 0 ((1 1 nil) (1 1 nil))))) (1 1 nil) (1 1 ((1 1 nil) (0 1 nil))))) (1 0 nil)) |
+| 7 | nil | ((2 nil ((5 nil ((5 false) (9 false))) (6 true ((8 true ((7 nil nil))) (6 nil nil))) (5 nil nil) (6 false))) (6 true) (5 true)) |
 
+Of course, not all justifications are mutually consistent, or even valid in their own right. Reasons for incompatibility/invalidity include distinct genesis blocks and equivocations.
+
+Mutual consistence and internal consistence are tested the same - internal consistence requires a mutual genesis block and a lack of equivocations within a justification, whereas for mutual consistence, we first take the union of all justifications considered. 
+*** Equivocations 
+First, we need to gather all the votes found in a relay-message's justificaiton
+#+BEGIN_SRC clojure
+(defn votes-in-justification
+  [relay-or-vote]
+   (cond
+     (s/valid? ::vote-message relay-or-vote) [relay-or-vote]
+     (s/valid? ::justification (last relay-or-vote)) (apply concat (map votes-in-justification (last relay-or-vote)))
+     ))
+#+END_SRC
+
+#+RESULTS:
+: #'caspojure.message/votes-in-justification
+
+#+BEGIN_SRC clojure :tangle no
+(votes-in-justification [1 false])
+(s/explain ::vote-message [1 false])
+
+(s/explain ::justification [[1 false [[0 true]]]])
+(votes-in-justification [2 true [[1 false
+                                   [[0 true] [1 false]]]
+                                  [2 false]]])
+#+END_SRC
+
+#+RESULTS:
+: [[7 false] [5 nil nil] [5 true [[0 nil nil] [6 true] [5 false]]]]
+
+Next, we filter these votes for equivocations, namely messages with contradictory votes from any validator.
+#+BEGIN_SRC clojure
+(defn equivocations [relay-message]
+  (->> relay-message
+       votes-in-justification
+       (group-by first)
+       (reduce-kv (fn [m k v] (assoc m k (into #{} v))) {})
+       (filter #(< 1 (count (val %))))))
+#+END_SRC
+
+#+RESULTS:
+: #'caspojure.message/equivocations
+
+From this, we specify that a valid justification should contain no equivocations.
+#+BEGIN_SRC clojure
+(s/def ::equivocation-void-message (s/and ::relay-message #(-> % val equivocations empty?)))
+(s/def ::equivocation-full-message (s/and ::relay-message #(->> % val (s/valid? ::equivocation-void-message) not)))
+#+END_SRC
+
+#+RESULTS:
+: :caspojure.message/equivocation-void-message
+: :caspojure.message/equivocation-full-message
+
+#+BEGIN_SRC clojure :tangle no
+((juxt identity equivocations) (gen/generate (s/gen ::relay-message)))
+((juxt identity equivocations) (gen/generate (s/gen ::equivocation-void-message)))
+((juxt identity equivocations) (gen/generate (s/gen ::equivocation-full-message)))
+
+(s/valid? ::equivocation-void-message [2 true [[1 false
+                                        [[0 true] [0 true] [1 false] [9 false
+                                                                      [[1 true] [3 false]]]]]]])
+
+(equivocations [2 true [[1 false
+                         [[0 true] [0 true] [1 false] [9 false
+                                                       [[1 true] [3 false]]]]]]])
+#+END_SRC
+
+#+RESULTS:
+: [[7 false [[9 nil nil] [9 nil nil]]] nil]
+
+*** Estimators
+In our binary vote system, an valid estimate of a justification is the majority result of the votes.
+First, we must define the correct running result of a vote.
+#+BEGIN_SRC clojure
+(defn estimate [relay-message]
+  (let [votes (votes-in-justification relay-message)
+        counted-votes (->> votes
+                           (into #{})
+                           (group-by second)
+                           (reduce-kv (fn [m k v] (assoc m k (count v))) {}))]
+    (case (count counted-votes)
+      ;; no votes
+      0 nil
+      ;; unilateral consensus
+      1 (ffirst counted-votes)
+      ;; majority
+      2 (case (apply compare (map second counted-votes))
+          -1 (-> counted-votes second first)
+          0 nil
+          1 (-> counted-votes first first)
+          ))))
+#+END_SRC
+
+#+RESULTS:
+: #'caspojure.message/estimate
+
+#+BEGIN_SRC clojure :tangle no
+(estimate [0 false [[1 true] [1 true]]])
+
+((juxt #(let [votes (votes-in-justification %)]
+          (->> votes
+               (into #{})
+               (group-by second)
+               (reduce-kv (fn [m k v] (assoc m k (count v))) {})
+               )
+          ) estimate) (gen/generate (s/gen ::relay-message)))
+#+END_SRC
+
+#+RESULTS:
+: true
+: [{true 3, false 2} true]
+
+From this, we specify a valid justification.
+#+BEGIN_SRC clojure
+(s/def ::justified-message (s/and (s/nonconforming ::relay-message) #(= (second %) (estimate %))))
+#+END_SRC
+
+#+RESULTS:
+: :caspojure.message/justified-message
+
+#+BEGIN_SRC clojure :tangle no
+((juxt second estimate) (s/conform (s/nonconforming ::relay-message) (gen/generate (s/gen ::relay-message))))
+((juxt votes-in-justification second estimate) (gen/generate (s/gen ::justified-message)))
+#+END_SRC
+
+#+RESULTS:
+| false | true |
+
+*** Valid message
+Having specified [[Equivocations][equivocations]] and [[Estimators][running vote results]], we can now combine these to provide the specification of a valid relay-message.
+#+BEGIN_SRC clojure
+(s/def ::valid-relay-message (s/and (s/nonconforming ::justified-message) ::equivocation-void-message))
+#+END_SRC
+
+#+RESULTS:
+: :caspojure.message/valid-relay-message
+
+#+BEGIN_SRC clojure
+(s/def ::valid-message (s/or
+                        :vote ::vote-message
+                        :relay ::valid-relay-message
+                        ))
+#+END_SRC
+
+#+RESULTS:
+: :caspojure.message/valid-message
+
+#+BEGIN_SRC clojure :tangle no
+(gen/generate (s/gen ::justified-message))
+#+END_SRC
+
+#+RESULTS:
+| 6 | true | ((6 nil nil) (9 nil nil) (9 true) (5 true)) |
+
+#+BEGIN_SRC clojure :tangle no
+(gen/generate (s/gen ::equivocation-void-message))
+#+END_SRC
+
+#+RESULTS:
+| 7 | false | ((6 nil ((9 true ((7 false))) (5 nil ((6 nil ((9 nil nil) (6 nil nil) (6 nil nil) (5 nil nil))) (5 true) (9 nil ((8 nil nil) (6 true) (6 nil nil) (8 nil nil))) (9 true))) (5 true) (2 true ((6 true))))) (5 true) (2 nil nil) (0 nil ((3 false)))) |
+
+#+BEGIN_SRC clojure :tangle no
+(gen/generate (s/gen ::valid-message))
+#+END_SRC
+
+#+RESULTS:
+| 5 | true | ((9 true) (6 false) (7 true)) |
+
+#+BEGIN_SRC clojure :tangle no
+((juxt
+  second
+  votes-in-justification
+  #(s/valid? ::justified-message %)
+  #(s/valid? ::equivocation-void-message %)
+  identity)
+ (gen/generate (s/gen ::valid-message)))
+
+(s/explain ::justified-message [1 true nil])
+
+((juxt
+  second
+  votes-in-justification
+  #(s/valid? ::justified-message %)
+  #(s/valid? ::equivocation-void-message %)
+  identity)
+ (gen/generate (s/gen ::valid-message)))
+
+(s/explain ::justified-message [1 true [[1 false] [2 true]]])
+(s/explain ::valid-message [1 true [[1 false] [1 true]]])
+#+END_SRC
+
+#+RESULTS:
+: [nil nil true true [6 nil nil]]
