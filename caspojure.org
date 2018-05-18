@@ -19,6 +19,7 @@ Provide alternate implementation of Casper in Clojure.
 #+BEGIN_SRC clojure :tangle src/caspojure/message.clj
 (ns caspojure.message
   (:require [clojure.spec.gen.alpha :as gen]
+            [clojure.spec.test.alpha :as stest]
             [clojure.spec.alpha :as s]))
 #+END_SRC
 
@@ -145,16 +146,33 @@ Mutual consistence and internal consistence are tested the same - internal consi
 *** Equivocations 
 First, we need to gather all the votes found in a relay-message's justificaiton
 #+BEGIN_SRC clojure
+(s/fdef votes-in-justification
+        :args (s/cat :justification-or-vote (s/or :vote ::vote-message
+                                                  :justification ::justification))
+        :ret (s/coll-of ::vote-message))
+
 (defn votes-in-justification
-  [relay-or-vote]
+  [justification-or-vote]
    (cond
-     (s/valid? ::vote-message relay-or-vote) [relay-or-vote]
-     (s/valid? ::justification (::justification relay-or-vote)) (apply concat (map votes-in-justification (::justification relay-or-vote)))
+     (s/valid? ::vote-message justification-or-vote) [justification-or-vote]
+     (s/valid? ::justification (::justification justification-or-vote)) (apply concat
+                                                                               (map votes-in-justification
+                                                                                    (::justification justification-or-vote)))
+     true []
      ))
 #+END_SRC
 
 #+RESULTS:
+: caspojure.message/votes-in-justification
 : #'caspojure.message/votes-in-justification
+
+#+BEGIN_SRC clojure :tangle no
+(stest/check `votes-in-justification)
+#+END_SRC
+
+#+RESULTS:
+: '((:spec #object(clojure.spec.alpha$fspec_impl$reify__2451 0x36561673 "clojure.spec.alpha$fspec_impl$reify__2451@36561673")  :clojure.spec.test.check/ret (:result true  :num-tests 1000  :seed 1526660877614)  :sym caspojure.message/votes-in-justification))
+
 
 #+BEGIN_SRC clojure :tangle no
 (votes-in-justification {::relayer-id 1
@@ -186,6 +204,10 @@ First, we need to gather all the votes found in a relay-message's justificaiton
 
 Next, we filter these votes for equivocations, namely messages with contradictory votes from any validator.
 #+BEGIN_SRC clojure
+(s/fdef equivocations
+        :args (s/cat :relay-message ::relay-message)
+        :ret (s/coll-of (s/tuple ::relayer-id (s/coll-of ::vote-message))))
+
 (defn equivocations [relay-message]
   (->> relay-message
        votes-in-justification
@@ -195,7 +217,15 @@ Next, we filter these votes for equivocations, namely messages with contradictor
 #+END_SRC
 
 #+RESULTS:
+: caspojure.message/equivocations
 : #'caspojure.message/equivocations
+
+#+BEGIN_SRC clojure :tangle no
+(stest/check `equivocations)
+#+END_SRC
+
+#+RESULTS:
+: '((:spec #object(clojure.spec.alpha$fspec_impl$reify__2451 0x6bc94c54 "clojure.spec.alpha$fspec_impl$reify__2451@6bc94c54")  :clojure.spec.test.check/ret (:result true  :num-tests 1000  :seed 1526660782150)  :sym caspojure.message/equivocations))
 
 #+BEGIN_SRC clojure :tangle no
 (->> {::relayer-id 2
@@ -274,6 +304,10 @@ From this, we specify that a valid justification should contain no equivocations
 In our binary vote system, an valid estimate of a justification is the majority result of the votes.
 First, we must define the correct running result of a vote.
 #+BEGIN_SRC clojure
+(s/fdef estimate
+        :args (s/cat :relay-message ::relay-message)
+        :ret ::estimate)
+
 (defn estimate [relay-message]
   (let [votes (votes-in-justification relay-message)
         counted-votes (->> votes
@@ -294,7 +328,16 @@ First, we must define the correct running result of a vote.
 #+END_SRC
 
 #+RESULTS:
+: caspojure.message/estimate
 : #'caspojure.message/estimate
+
+#+BEGIN_SRC clojure :tangle no
+(stest/check `estimate)
+#+END_SRC
+
+#+RESULTS:
+: '((:spec #object(clojure.spec.alpha$fspec_impl$reify__2451 0x514e202a "clojure.spec.alpha$fspec_impl$reify__2451@514e202a")  :clojure.spec.test.check/ret (:result true  :num-tests 1000  :seed 1526660825571)  :sym caspojure.message/estimate))
+
 
 #+BEGIN_SRC clojure :tangle no
 (estimate {::relayer-id 0

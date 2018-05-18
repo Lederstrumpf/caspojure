@@ -1,5 +1,6 @@
 (ns caspojure.message
   (:require [clojure.spec.gen.alpha :as gen]
+            [clojure.spec.test.alpha :as stest]
             [clojure.spec.alpha :as s]))
 
 (def relayer-count 10)
@@ -23,12 +24,24 @@
                                                     ::justification #(gen/return [])}))
                                  ))
 
+(s/fdef votes-in-justification
+        :args (s/cat :justification-or-vote (s/or :vote ::vote-message
+                                                  :justification ::justification))
+        :ret (s/coll-of ::vote-message))
+
 (defn votes-in-justification
-  [relay-or-vote]
+  [justification-or-vote]
    (cond
-     (s/valid? ::vote-message relay-or-vote) [relay-or-vote]
-     (s/valid? ::justification (::justification relay-or-vote)) (apply concat (map votes-in-justification (::justification relay-or-vote)))
+     (s/valid? ::vote-message justification-or-vote) [justification-or-vote]
+     (s/valid? ::justification (::justification justification-or-vote)) (apply concat
+                                                                               (map votes-in-justification
+                                                                                    (::justification justification-or-vote)))
+     true []
      ))
+
+(s/fdef equivocations
+        :args (s/cat :relay-message ::relay-message)
+        :ret (s/coll-of (s/tuple ::relayer-id (s/coll-of ::vote-message))))
 
 (defn equivocations [relay-message]
   (->> relay-message
@@ -39,6 +52,10 @@
 
 (s/def ::equivocation-void-message (s/and (s/nonconforming ::relay-message) #(-> % equivocations empty?)))
 (s/def ::equivocation-full-message (s/and (s/nonconforming ::relay-message) #(->> % (s/valid? ::equivocation-void-message) not)))
+
+(s/fdef estimate
+        :args (s/cat :relay-message ::relay-message)
+        :ret ::estimate)
 
 (defn estimate [relay-message]
   (let [votes (votes-in-justification relay-message)
