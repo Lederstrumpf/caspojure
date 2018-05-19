@@ -11,6 +11,7 @@ Provide alternate implementation of Casper in Clojure.
   :dependencies [
                  [org.clojure/clojure "1.10.0-alpha4"]
                  [org.clojure/test.check "0.10.0-alpha2" :scope "test"]
+                 [manifold "0.1.7-alpha5"]
                  ])
 #+END_SRC
 
@@ -21,6 +22,18 @@ Provide alternate implementation of Casper in Clojure.
   (:require [clojure.spec.gen.alpha :as gen]
             [clojure.spec.test.alpha :as stest]
             [clojure.spec.alpha :as s]))
+#+END_SRC
+
+#+RESULTS:
+: nil
+
+#+BEGIN_SRC clojure :tangle src/caspojure/validator.clj
+(ns caspojure.validator
+  (:require [clojure.spec.gen.alpha :as gen]
+            [clojure.spec.test.alpha :as stest]
+            [clojure.spec.alpha :as s]
+            [manifold.stream :as stream]
+            [caspojure.message :as message]))
 #+END_SRC
 
 #+RESULTS:
@@ -298,7 +311,11 @@ From this, we specify that a valid justification should contain no equivocations
 #+END_SRC
 
 #+RESULTS:
-: [caspojure\.message{:relayer-id 5 (\, :estimate) true (\, :justification) [] } nil]
+: [#:caspojure.message{:relayer-id 6, :estimate true, :justification [#:caspojure.message{:relayer-id 5, :estimate true, :justification [#:caspojure.message{:relayer-id 8, :estimate nil, :justification [#:caspojure.message{:relayer-id 0, :estimate true, :justification [#:caspojure.message{:relayer-id 5, :estimate false, :justification []}]} #:caspojure.message{:relayer-id 5, :vote true} #:caspojure.message{:relayer-id 7, :vote false}]} #:caspojure.message{:relayer-id 5, :vote false}]} #:caspojure.message{:relayer-id 9, :vote true}]} ([5 #{#:caspojure.message{:relayer-id 5, :vote true} #:caspojure.message{:relayer-id 5, :vote false}}])]
+: [#:caspojure.message{:relayer-id 6, :estimate true, :justification [#:caspojure.message{:relayer-id 8, :estimate false, :justification [#:caspojure.message{:relayer-id 6, :vote false} #:caspojure.message{:relayer-id 7, :estimate nil, :justification []} #:caspojure.message{:relayer-id 5, :estimate nil, :justification [#:caspojure.message{:relayer-id 9, :vote true}]}]} #:caspojure.message{:relayer-id 2, :vote false}]} ()]
+: [#:caspojure.message{:relayer-id 8, :estimate false, :justification [#:caspojure.message{:relayer-id 8, :estimate true, :justification [#:caspojure.message{:relayer-id 7, :estimate nil, :justification [#:caspojure.message{:relayer-id 6, :vote true} #:caspojure.message{:relayer-id 5, :estimate false, :justification [#:caspojure.message{:relayer-id 6, :estimate true, :justification [#:caspojure.message{:relayer-id 6, :vote false} #:caspojure.message{:relayer-id 6, :vote false} #:caspojure.message{:relayer-id 9, :vote true}]} #:caspojure.message{:relayer-id 7, :vote false} #:caspojure.message{:relayer-id 0, :vote true}]}]} #:caspojure.message{:relayer-id 5, :estimate nil, :justification []} #:caspojure.message{:relayer-id 6, :vote true}]}]} ([6 #{#:caspojure.message{:relayer-id 6, :vote false} #:caspojure.message{:relayer-id 6, :vote true}}])]
+: false
+: ([1 #{#:caspojure.message{:relayer-id 1, :vote true} #:caspojure.message{:relayer-id 1, :vote false}}])
 
 *** Estimators
 In our binary vote system, an valid estimate of a justification is the majority result of the votes.
@@ -462,4 +479,40 @@ Having specified [[Equivocations][equivocations]] and [[Estimators][running vote
 #+END_SRC
 
 #+RESULTS:
-: [[] nil true true caspojure\.message{:relayer-id 9 (\, :estimate) nil (\, :justification) [] }]
+: [nil [caspojure\.message{:relayer-id 6 (\, :vote) true}] false false caspojure\.message{:relayer-id 6 (\, :vote) true}]
+** Validators
+:PROPERTIES:
+:header-args:clojure: :tangle src/caspojure/validator.clj :ns caspojure.validator
+:END:
+We now turn towards validators. Validators are identified with their relay-id. They maintain an internal view constructed from the messages they have received so far. Note that this internal view does not necessarily match the view a validator reveals in their broadcasted justifications - a validator can opt to omit particular knowledge in their justifications if this supports their adversarial ambitions. However, we may also construct dependent views that reflect a lack of trust in particular messages received, if a validator has reason to doubt their veracity.
+#+BEGIN_SRC clojure
+(s/def ::validator (s/keys :req [::message/relayer-id ::view]))
+(s/def ::view (s/coll-of ::message/relay-message :gen-max 5))
+#+END_SRC
+
+#+RESULTS:
+: :caspojure.validator/validator
+: :caspojure.validator/view
+
+#+BEGIN_SRC clojure :tangle no
+(gen/generate (s/gen ::view))
+(gen/generate (s/gen ::validator))
+#+END_SRC
+
+#+RESULTS:
+: [caspojure\.message{:relayer-id 8 (\, :estimate) true (\, :justification) [caspojure\.message{:relayer-id 6 (\, :estimate) false (\, :justification) [caspojure\.message{:relayer-id 7 (\, :estimate) false (\, :justification) [caspojure\.message{:relayer-id 2 (\, :estimate) false (\, :justification) [caspojure\.message{:relayer-id 8 (\, :estimate) true (\, :justification) [caspojure\.message{:relayer-id 5 (\, :vote) false}] }] } caspojure\.message{:relayer-id 6 (\, :estimate) nil (\, :justification) [caspojure\.message{:relayer-id 5 (\, :vote) false} caspojure\.message{:relayer-id 0 (\, :vote) true} caspojure\.message{:relayer-id 0 (\, :vote) false}] }] } caspojure\.message{:relayer-id 8 (\, :vote) false}] } caspojure\.message{:relayer-id 5 (\, :estimate) false (\, :justification) [caspojure\.message{:relayer-id 7 (\, :vote) true} caspojure\.message{:relayer-id 7 (\, :vote) false}] } caspojure\.message{:relayer-id 8 (\, :vote) false}] } caspojure\.message{:relayer-id 9 (\, :estimate) nil (\, :justification) [caspojure\.message{:relayer-id 9 (\, :estimate) false (\, :justification) [caspojure\.message{:relayer-id 8 (\, :vote) true}] } caspojure\.message{:relayer-id 7 (\, :estimate) nil (\, :justification) [caspojure\.message{:relayer-id 9 (\, :vote) false}] }] } caspojure\.message{:relayer-id 1 (\, :estimate) true (\, :justification) [] } caspojure\.message{:relayer-id 7 (\, :estimate) nil (\, :justification) [caspojure\.message{:relayer-id 5 (\, :estimate) false (\, :justification) [caspojure\.message{:relayer-id 6 (\, :vote) true} caspojure\.message{:relayer-id 9 (\, :vote) false}] } caspojure\.message{:relayer-id 7 (\, :estimate) true (\, :justification) [] }] }]
+
+As mentioned [[Basic justification][earlier]], for now, we work with a fixed number of validators. We build a list of validators and their associated communication streams to facilitate simple communication among them.
+#+BEGIN_SRC clojure
+(def validators (reduce (fn [m [k v]] (assoc m k v)) {} (map
+                                                        (fn [[id validator] stream] (vector id {::validator validator, ::stream stream}))
+                                                        (map #(vector
+                                                               %
+                                                               (atom (gen/generate (s/gen ::validator
+                                                                                          {::message/relayer-id (fn [] (gen/return %))}))))
+                                                             (range message/relayer-count))
+                                                        (repeatedly #(stream/stream)))))
+#+END_SRC
+
+#+RESULTS:
+: #'caspojure.validator/validators

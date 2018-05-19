@@ -6,4 +6,5 @@
   :dependencies [
                  [org.clojure/clojure "1.10.0-alpha4"]
                  [org.clojure/test.check "0.10.0-alpha2" :scope "test"]
+                 [manifold "0.1.7-alpha5"]
                  ])
